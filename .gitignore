@@ -5,3 +5,5 @@ android/.project
 .idea/
 
 android/.settings/org.eclipse.buildship.core.prefs
+android/gradle
+example/ios/Flutter/flutter_export_environment.sh
