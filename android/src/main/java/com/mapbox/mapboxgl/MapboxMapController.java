@@ -10,6 +10,8 @@ import android.app.Application;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.content.res.AssetFileDescriptor;
+import android.content.res.AssetManager;
 import android.graphics.PointF;
 import android.graphics.RectF;
 import android.os.Bundle;
@@ -17,6 +19,7 @@ import androidx.annotation.NonNull;
 import android.util.Log;
 import android.view.View;
 
+import com.mapbox.geojson.FeatureCollection;
 import com.mapbox.mapboxsdk.Mapbox;
 import com.mapbox.mapboxsdk.camera.CameraPosition;
 import com.mapbox.mapboxsdk.camera.CameraUpdate;
@@ -40,6 +43,7 @@ import com.mapbox.mapboxsdk.plugins.annotation.Symbol;
 import com.mapbox.mapboxsdk.plugins.annotation.SymbolManager;
 import com.mapbox.mapboxsdk.plugins.annotation.Line;
 import com.mapbox.mapboxsdk.plugins.annotation.LineManager;
+import com.mapbox.mapboxsdk.style.sources.GeoJsonSource;
 import com.mapbox.geojson.Feature;
 import com.mapbox.mapboxsdk.style.expressions.Expression;
 import io.flutter.plugin.common.MethodCall;
@@ -47,11 +51,14 @@ import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.common.PluginRegistry;
 import io.flutter.plugin.platform.PlatformView;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Scanner;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.mapbox.mapboxgl.MapboxMapsPlugin.CREATED;
@@ -64,21 +71,11 @@ import static com.mapbox.mapboxgl.MapboxMapsPlugin.STOPPED;
 /**
  * Controller of a single MapboxMaps MapView instance.
  */
-final class MapboxMapController
-  implements Application.ActivityLifecycleCallbacks,
-  MapboxMap.OnCameraIdleListener,
-  MapboxMap.OnCameraMoveListener,
-  MapboxMap.OnCameraMoveStartedListener,
-  OnAnnotationClickListener,
-  MapboxMap.OnMapClickListener,
-  MapboxMapOptionsSink,
-  MethodChannel.MethodCallHandler,
-  com.mapbox.mapboxsdk.maps.OnMapReadyCallback,
-  OnCameraTrackingChangedListener,
-  OnSymbolTappedListener,
-  OnLineTappedListener,
-  OnCircleTappedListener,
-  PlatformView {
+final class MapboxMapController implements Application.ActivityLifecycleCallbacks, MapboxMap.OnCameraIdleListener,
+    MapboxMap.OnCameraMoveListener, MapboxMap.OnCameraMoveStartedListener, OnAnnotationClickListener,
+    MapboxMap.OnMapClickListener, MapboxMapOptionsSink, MethodChannel.MethodCallHandler,
+    com.mapbox.mapboxsdk.maps.OnMapReadyCallback, OnCameraTrackingChangedListener, OnSymbolTappedListener,
+    OnLineTappedListener, OnCircleTappedListener, PlatformView {
   private static final String TAG = "MapboxMapController";
   private final int id;
   private final AtomicInteger activityState;
@@ -103,13 +100,8 @@ final class MapboxMapController
   private final String styleStringInitial;
   private LocationComponent locationComponent = null;
 
-  MapboxMapController(
-    int id,
-    Context context,
-    AtomicInteger activityState,
-    PluginRegistry.Registrar registrar,
-    MapboxMapOptions options,
-    String styleStringInitial) {
+  MapboxMapController(int id, Context context, AtomicInteger activityState, PluginRegistry.Registrar registrar,
+      MapboxMapOptions options, String styleStringInitial) {
     Mapbox.getInstance(context, getAccessToken(context));
     this.id = id;
     this.context = context;
@@ -121,15 +113,15 @@ final class MapboxMapController
     this.lines = new HashMap<>();
     this.circles = new HashMap<>();
     this.density = context.getResources().getDisplayMetrics().density;
-    methodChannel =
-      new MethodChannel(registrar.messenger(), "plugins.flutter.io/mapbox_maps_" + id);
+    methodChannel = new MethodChannel(registrar.messenger(), "plugins.flutter.io/mapbox_maps_" + id);
     methodChannel.setMethodCallHandler(this);
     this.registrarActivityHashCode = registrar.activity().hashCode();
   }
 
   private static String getAccessToken(@NonNull Context context) {
     try {
-      ApplicationInfo ai = context.getPackageManager().getApplicationInfo(context.getPackageName(), PackageManager.GET_META_DATA);
+      ApplicationInfo ai = context.getPackageManager().getApplicationInfo(context.getPackageName(),
+          PackageManager.GET_META_DATA);
       Bundle bundle = ai.metaData;
       return bundle.getString("com.mapbox.token");
     } catch (PackageManager.NameNotFoundException e) {
@@ -147,40 +139,39 @@ final class MapboxMapController
 
   void init() {
     switch (activityState.get()) {
-      case STOPPED:
-        mapView.onCreate(null);
-        mapView.onStart();
-        mapView.onResume();
-        mapView.onPause();
-        mapView.onStop();
-        break;
-      case PAUSED:
-        mapView.onCreate(null);
-        mapView.onStart();
-        mapView.onResume();
-        mapView.onPause();
-        break;
-      case RESUMED:
-        mapView.onCreate(null);
-        mapView.onStart();
-        mapView.onResume();
-        break;
-      case STARTED:
-        mapView.onCreate(null);
-        mapView.onStart();
-        break;
-      case CREATED:
-        mapView.onCreate(null);
-        break;
-      case DESTROYED:
-        mapboxMap.removeOnCameraIdleListener(this);
-        mapboxMap.removeOnCameraMoveStartedListener(this);
-        mapboxMap.removeOnCameraMoveListener(this);
-        mapView.onDestroy();
-        break;
-      default:
-        throw new IllegalArgumentException(
-          "Cannot interpret " + activityState.get() + " as an activity state");
+    case STOPPED:
+      mapView.onCreate(null);
+      mapView.onStart();
+      mapView.onResume();
+      mapView.onPause();
+      mapView.onStop();
+      break;
+    case PAUSED:
+      mapView.onCreate(null);
+      mapView.onStart();
+      mapView.onResume();
+      mapView.onPause();
+      break;
+    case RESUMED:
+      mapView.onCreate(null);
+      mapView.onStart();
+      mapView.onResume();
+      break;
+    case STARTED:
+      mapView.onCreate(null);
+      mapView.onStart();
+      break;
+    case CREATED:
+      mapView.onCreate(null);
+      break;
+    case DESTROYED:
+      mapboxMap.removeOnCameraIdleListener(this);
+      mapboxMap.removeOnCameraMoveStartedListener(this);
+      mapboxMap.removeOnCameraMoveListener(this);
+      mapView.onDestroy();
+      break;
+    default:
+      throw new IllegalArgumentException("Cannot interpret " + activityState.get() + " as an activity state");
     }
     registrar.activity().getApplication().registerActivityLifecycleCallbacks(this);
     mapView.getMapAsync(this);
@@ -201,14 +192,14 @@ final class MapboxMapController
   private SymbolBuilder newSymbolBuilder() {
     return new SymbolBuilder(symbolManager);
   }
-  
+
   private void removeSymbol(String symbolId) {
     final SymbolController symbolController = symbols.remove(symbolId);
     if (symbolController != null) {
       symbolController.remove(symbolManager);
     }
   }
-  
+
   private SymbolController symbol(String symbolId) {
     final SymbolController symbol = symbols.get(symbolId);
     if (symbol == null) {
@@ -216,18 +207,18 @@ final class MapboxMapController
     }
     return symbol;
   }
-  
+
   private LineBuilder newLineBuilder() {
     return new LineBuilder(lineManager);
   }
-  
+
   private void removeLine(String lineId) {
     final LineController lineController = lines.remove(lineId);
     if (lineController != null) {
       lineController.remove(lineManager);
     }
   }
-  
+
   private LineController line(String lineId) {
     final LineController line = lines.get(lineId);
     if (line == null) {
@@ -239,7 +230,7 @@ final class MapboxMapController
   private CircleBuilder newCircleBuilder() {
     return new CircleBuilder(circleManager);
   }
-    
+
   private void removeCircle(String circleId) {
     final CircleController circleController = circles.remove(circleId);
     if (circleController != null) {
@@ -271,7 +262,7 @@ final class MapboxMapController
 
   @Override
   public void setStyleString(String styleString) {
-    //check if json, url or plain string:
+    // check if json, url or plain string:
     if (styleString == null || styleString.isEmpty()) {
       Log.e(TAG, "setStyleString - string empty or null");
     } else if (styleString.startsWith("{") || styleString.startsWith("[")) {
@@ -296,12 +287,11 @@ final class MapboxMapController
     }
   };
 
-  @SuppressWarnings( {"MissingPermission"})
+  @SuppressWarnings({ "MissingPermission" })
   private void enableLocationComponent(@NonNull Style style) {
     if (hasLocationPermission()) {
       LocationComponentOptions locationComponentOptions = LocationComponentOptions.builder(context)
-        .trackingGesturesManagement(true)
-        .build();
+          .trackingGesturesManagement(true).build();
       locationComponent = mapboxMap.getLocationComponent();
       locationComponent.activateLocationComponent(context, style, locationComponentOptions);
       locationComponent.setLocationComponentEnabled(true);
@@ -311,6 +301,14 @@ final class MapboxMapController
       locationComponent.addOnCameraTrackingChangedListener(this);
     } else {
       Log.e(TAG, "missing location permissions");
+    }
+  }
+
+  private GeoJsonManager geoJsonManager;
+
+  private void enableGeoJsonSource(@NonNull Style style) {
+    if (geoJsonManager == null) {
+      geoJsonManager = new GeoJsonManager(mapView, mapboxMap, style);
     }
   }
 
@@ -331,7 +329,7 @@ final class MapboxMapController
       lineManager.addClickListener(MapboxMapController.this::onAnnotationClick);
     }
   }
-    
+
   private void enableCircleManager(@NonNull Style style) {
     if (circleManager == null) {
       circleManager = new CircleManager(mapView, mapboxMap, style);
@@ -342,138 +340,163 @@ final class MapboxMapController
   @Override
   public void onMethodCall(MethodCall call, MethodChannel.Result result) {
     switch (call.method) {
-      case "map#waitForMap":
-        if (mapboxMap != null) {
-          result.success(null);
-          return;
-        }
-        mapReadyResult = result;
-        break;
-      case "map#update": {
-        Convert.interpretMapboxMapOptions(call.argument("options"), this);
-        result.success(Convert.toJson(getCameraPosition()));
-        break;
-      }
-      case "camera#move": {
-        final CameraUpdate cameraUpdate = Convert.toCameraUpdate(call.argument("cameraUpdate"), mapboxMap, density);
-        if (cameraUpdate != null) {
-          // camera transformation not handled yet
-          moveCamera(cameraUpdate);
-        }
+    case "map#waitForMap":
+      if (mapboxMap != null) {
         result.success(null);
-        break;
+        return;
       }
-      case "camera#animate": {
-        final CameraUpdate cameraUpdate = Convert.toCameraUpdate(call.argument("cameraUpdate"), mapboxMap, density);
-        if (cameraUpdate != null) {
-          // camera transformation not handled yet
-          animateCamera(cameraUpdate);
-        }
-        result.success(null);
-        break;
+      mapReadyResult = result;
+      break;
+    case "map#update": {
+      Convert.interpretMapboxMapOptions(call.argument("options"), this);
+      result.success(Convert.toJson(getCameraPosition()));
+      break;
+    }
+    case "camera#move": {
+      final CameraUpdate cameraUpdate = Convert.toCameraUpdate(call.argument("cameraUpdate"), mapboxMap, density);
+      if (cameraUpdate != null) {
+        // camera transformation not handled yet
+        moveCamera(cameraUpdate);
       }
-      case "map#queryRenderedFeatures": {
-        Map<String, Object> reply = new HashMap<>();
-        List<Feature> features;
+      result.success(null);
+      break;
+    }
+    case "camera#animate": {
+      final CameraUpdate cameraUpdate = Convert.toCameraUpdate(call.argument("cameraUpdate"), mapboxMap, density);
+      if (cameraUpdate != null) {
+        // camera transformation not handled yet
+        animateCamera(cameraUpdate);
+      }
+      result.success(null);
+      break;
+    }
+    case "map#queryRenderedFeatures": {
+      Map<String, Object> reply = new HashMap<>();
+      List<Feature> features;
 
-        String[] layerIds = ((List<String>) call.argument("layerIds")).toArray(new String[0]);
+      String[] layerIds = ((List<String>) call.argument("layerIds")).toArray(new String[0]);
 
-        String filter = (String) call.argument("filter");
+      String filter = (String) call.argument("filter");
 
-        Expression filterExpression = filter == null ? null : new Expression(filter);
-        if (call.hasArgument("x")) {
-          Double x = call.argument("x");
-          Double y = call.argument("y");
-          PointF pixel = new PointF(x.floatValue(), y.floatValue());
-          features = mapboxMap.queryRenderedFeatures(pixel, filterExpression, layerIds);
-        } else {
-          Double left = call.argument("left");
-          Double top = call.argument("top");
-          Double right = call.argument("right");
-          Double bottom = call.argument("bottom");
-          RectF rectF = new RectF(left.floatValue(), top.floatValue(), right.floatValue(), bottom.floatValue());
-          features = mapboxMap.queryRenderedFeatures(rectF, filterExpression, layerIds);
+      Expression filterExpression = filter == null ? null : new Expression(filter);
+      if (call.hasArgument("x")) {
+        Double x = call.argument("x");
+        Double y = call.argument("y");
+        PointF pixel = new PointF(x.floatValue(), y.floatValue());
+        features = mapboxMap.queryRenderedFeatures(pixel, filterExpression, layerIds);
+      } else {
+        Double left = call.argument("left");
+        Double top = call.argument("top");
+        Double right = call.argument("right");
+        Double bottom = call.argument("bottom");
+        RectF rectF = new RectF(left.floatValue(), top.floatValue(), right.floatValue(), bottom.floatValue());
+        features = mapboxMap.queryRenderedFeatures(rectF, filterExpression, layerIds);
+      }
+      List<String> featuresJson = new ArrayList<>();
+      for (Feature feature : features) {
+        featuresJson.add(feature.toJson());
+      }
+      reply.put("features", featuresJson);
+      result.success(reply);
+      break;
+    }
+    case "geojson#add": {
+      final String file = call.argument("file");
+      final String sourceId = call.argument("id");
+      final Map options = call.argument("options");
+
+      AssetManager assetManager = registrar.context().getAssets();
+      String key = registrar.lookupKeyForAsset(file);
+      try {
+        InputStream is = assetManager.open(key);
+        Scanner scanner = new Scanner(is).useDelimiter("\\A");
+        final String json = scanner.hasNext() ? scanner.next() : "";
+        final FeatureCollection features = FeatureCollection.fromJson(json);
+        final GeoJsonSource source = new GeoJsonSource(sourceId, features);
+        try {
+          geoJsonManager.addSource(source, options);
+        } catch (Exception e) {
+          e.printStackTrace();
         }
-        List<String> featuresJson = new ArrayList<>();
-        for (Feature feature : features) {
-          featuresJson.add(feature.toJson());
-        }
-        reply.put("features", featuresJson);
-        result.success(reply);
-        break;
+
+      } catch (IOException e) {
+        e.printStackTrace();
       }
-      case "symbol#add": {
-        final SymbolBuilder symbolBuilder = newSymbolBuilder();
-        Convert.interpretSymbolOptions(call.argument("options"), symbolBuilder);
-        final Symbol symbol = symbolBuilder.build();
-        final String symbolId = String.valueOf(symbol.getId());
-        symbols.put(symbolId, new SymbolController(symbol, true, this));
-        result.success(symbolId);
-        break;
-      }
-      case "symbol#remove": {
-        final String symbolId = call.argument("symbol");
-        removeSymbol(symbolId);
-        result.success(null);
-        break;
-      }
-      case "symbol#update": {
-        final String symbolId = call.argument("symbol");
-        final SymbolController symbol = symbol(symbolId);
-        Convert.interpretSymbolOptions(call.argument("options"), symbol);
-        symbol.update(symbolManager);
-        result.success(null);
-        break;
-      }
-      case "line#add": {
-        final LineBuilder lineBuilder = newLineBuilder();
-        Convert.interpretLineOptions(call.argument("options"), lineBuilder);
-        final Line line = lineBuilder.build();
-        final String lineId = String.valueOf(line.getId());
-        lines.put(lineId, new LineController(line, true, this));
-        result.success(lineId);
-        break;
-      }
-      case "line#remove": {
-        final String lineId = call.argument("line");
-        removeLine(lineId);
-        result.success(null);
-        break;
-      }
-      case "line#update": {
-        final String lineId = call.argument("line");
-        final LineController line = line(lineId);
-        Convert.interpretLineOptions(call.argument("options"), line);
-        line.update(lineManager);
-        result.success(null);
-        break;
-      }
-      case "circle#add": {
-        final CircleBuilder circleBuilder = newCircleBuilder();
-        Convert.interpretCircleOptions(call.argument("options"), circleBuilder);
-        final Circle circle = circleBuilder.build();
-        final String circleId = String.valueOf(circle.getId());
-        circles.put(circleId, new CircleController(circle, true, this));
-        result.success(circleId);
-        break;
-      }
-      case "circle#remove": {
-        final String circleId = call.argument("circle");
-        removeCircle(circleId);
-        result.success(null);
-        break;
-      }
-      case "circle#update": {
-        Log.e(TAG, "update circle");
-        final String circleId = call.argument("circle");
-        final CircleController circle = circle(circleId);
-        Convert.interpretCircleOptions(call.argument("options"), circle);
-        circle.update(circleManager);
-        result.success(null);
-        break;
-      }
-      default:
-        result.notImplemented();
+
+      break;
+    }
+    case "symbol#add": {
+      final SymbolBuilder symbolBuilder = newSymbolBuilder();
+      Convert.interpretSymbolOptions(call.argument("options"), symbolBuilder);
+      final Symbol symbol = symbolBuilder.build();
+      final String symbolId = String.valueOf(symbol.getId());
+      symbols.put(symbolId, new SymbolController(symbol, true, this));
+      result.success(symbolId);
+      break;
+    }
+    case "symbol#remove": {
+      final String symbolId = call.argument("symbol");
+      removeSymbol(symbolId);
+      result.success(null);
+      break;
+    }
+    case "symbol#update": {
+      final String symbolId = call.argument("symbol");
+      final SymbolController symbol = symbol(symbolId);
+      Convert.interpretSymbolOptions(call.argument("options"), symbol);
+      symbol.update(symbolManager);
+      result.success(null);
+      break;
+    }
+    case "line#add": {
+      final LineBuilder lineBuilder = newLineBuilder();
+      Convert.interpretLineOptions(call.argument("options"), lineBuilder);
+      final Line line = lineBuilder.build();
+      final String lineId = String.valueOf(line.getId());
+      lines.put(lineId, new LineController(line, true, this));
+      result.success(lineId);
+      break;
+    }
+    case "line#remove": {
+      final String lineId = call.argument("line");
+      removeLine(lineId);
+      result.success(null);
+      break;
+    }
+    case "line#update": {
+      final String lineId = call.argument("line");
+      final LineController line = line(lineId);
+      Convert.interpretLineOptions(call.argument("options"), line);
+      line.update(lineManager);
+      result.success(null);
+      break;
+    }
+    case "circle#add": {
+      final CircleBuilder circleBuilder = newCircleBuilder();
+      Convert.interpretCircleOptions(call.argument("options"), circleBuilder);
+      final Circle circle = circleBuilder.build();
+      final String circleId = String.valueOf(circle.getId());
+      circles.put(circleId, new CircleController(circle, true, this));
+      result.success(circleId);
+      break;
+    }
+    case "circle#remove": {
+      final String circleId = call.argument("circle");
+      removeCircle(circleId);
+      result.success(null);
+      break;
+    }
+    case "circle#update": {
+      Log.e(TAG, "update circle");
+      final String circleId = call.argument("circle");
+      final CircleController circle = circle(circleId);
+      Convert.interpretCircleOptions(call.argument("options"), circle);
+      circle.update(circleManager);
+      result.success(null);
+      break;
+    }
+    default:
+      result.notImplemented();
     }
   }
 
@@ -524,7 +547,7 @@ final class MapboxMapController
         lineController.onTap();
       }
     }
-    
+
     if (annotation instanceof Circle) {
       final CircleController circleController = circles.get(String.valueOf(annotation.getId()));
       if (circleController != null) {
@@ -679,7 +702,7 @@ final class MapboxMapController
 
   @Override
   public void setMinMaxZoomPreference(Float min, Float max) {
-    //mapboxMap.resetMinMaxZoomPreference();
+    // mapboxMap.resetMinMaxZoomPreference();
     if (min != null) {
       mapboxMap.setMinZoomPreference(min);
     }
@@ -716,28 +739,27 @@ final class MapboxMapController
   }
 
   private void updateMyLocationEnabled() {
-    //TODO: call location initialization if changed to true and not initialized yet.;
-    //Show/Hide use location as needed
+    // TODO: call location initialization if changed to true and not initialized
+    // yet.;
+    // Show/Hide use location as needed
   }
 
   private void updateMyLocationTrackingMode() {
-    int[] mapboxTrackingModes = new int[] {CameraMode.NONE, CameraMode.TRACKING, CameraMode.TRACKING_COMPASS, CameraMode.TRACKING_GPS};
+    int[] mapboxTrackingModes = new int[] { CameraMode.NONE, CameraMode.TRACKING, CameraMode.TRACKING_COMPASS,
+        CameraMode.TRACKING_GPS };
     locationComponent.setCameraMode(mapboxTrackingModes[this.myLocationTrackingMode]);
   }
 
   private boolean hasLocationPermission() {
-    return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
-      == PackageManager.PERMISSION_GRANTED
-      || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
-      == PackageManager.PERMISSION_GRANTED;
+    return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
   }
 
   private int checkSelfPermission(String permission) {
     if (permission == null) {
       throw new IllegalArgumentException("permission is null");
     }
-    return context.checkPermission(
-      permission, android.os.Process.myPid(), android.os.Process.myUid());
+    return context.checkPermission(permission, android.os.Process.myPid(), android.os.Process.myUid());
   }
 
 }

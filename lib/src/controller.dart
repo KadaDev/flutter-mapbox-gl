@@ -367,7 +367,7 @@ class MapboxMapController extends ChangeNotifier {
   /// been notified.
   Future<Circle> addCircle(CircleOptions options) async {
     final CircleOptions effectiveOptions =
-    CircleOptions.defaultOptions.copyWith(options);
+        CircleOptions.defaultOptions.copyWith(options);
     final String circleId = await _channel.invokeMethod(
       'circle#add',
       <String, dynamic>{
@@ -398,7 +398,6 @@ class MapboxMapController extends ChangeNotifier {
     circle._options = circle._options.copyWith(changes);
     notifyListeners();
   }
-
 
   /// Removes the specified [circle] from the map. The circle must be a current
   /// member of the [circles] set.
@@ -439,6 +438,17 @@ class MapboxMapController extends ChangeNotifier {
       'circle': id,
     });
     _circles.remove(id);
+  }
+
+  /// Adds a GeoJsonSource
+
+  Future<void> addGeoJson(
+      String id, String file, Map<String, Map<String, String>> options) async {
+    await _channel.invokeMethod('geojson#add', <String, Object>{
+      'id': id,
+      'file': file,
+      'options': options,
+    });
   }
 
   Future<List> queryRenderedFeatures(
